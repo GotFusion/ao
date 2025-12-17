@@ -59,7 +59,7 @@ class Int8Tensor(TorchAOBaseTensor):
     """
 
     tensor_data_names = ["qdata", "scale"]
-    optional_tensor_data_names = ["activation_scale", "act_pre_scale"]
+    optional_tensor_data_names = ["act_scale", "act_pre_scale"]
     tensor_attribute_names = ["block_size", "dtype"]
     optional_tensor_attribute_names = [
         "act_quant_kwargs",
@@ -108,6 +108,7 @@ class Int8Tensor(TorchAOBaseTensor):
             f"qdata={self.qdata}, "
             f"scale={self.scale}, "
             f"act_scale={self.act_scale}, "
+            f"act_pre_scale={self.act_scale}, "
             f"block_size={self.block_size}, "
             f"shape={self.shape}, "
             f"device={self.device}, "
@@ -301,7 +302,7 @@ def _(func, types, args, kwargs):
             block_size,
             self.dtype,
             act_quant_kwargs=self.act_quant_kwargs,
-            activation_scale=self.activation_scale,
+            act_scale=self.act_scale,
             act_pre_scale=self.act_pre_scale,
         ),
     )
