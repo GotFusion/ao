@@ -334,9 +334,9 @@ def _(func, types, args, kwargs):
         old_int8_tensor.scale[index],
         old_int8_tensor.block_size[1:],
         old_int8_tensor.dtype,
-        old_int8_tensor.act_quant_kwargs,
-        old_int8_tensor.activation_scale,
+        old_int8_tensor.act_scale,
         old_int8_tensor.act_pre_scale,
+        old_int8_tensor.act_quant_kwargs,
     )
     return return_and_correct_aliasing(func, args, kwargs, new_int8_tensor)
 
