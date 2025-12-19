@@ -274,12 +274,15 @@ class TestInt8StaticQuant(TorchAOIntegrationTestCase):
         static_out_compile = model_dynamic_quant(input_tensor)
         sqnr_static_compile = compute_error(model_out_baseline, static_out_compile)
 
-        assert (
-            sqnr_static_compile
-            == sqnr_static_eager
-            == sqnr_dynamic_compile
-            == sqnr_dynamic_eager
-        ), "SQNR should be the same for all quantization methods and eager/compile"
+        assert sqnr_static_compile == sqnr_static_eager, (
+            f"Static SQNR mismatch: compile={sqnr_static_compile} vs eager={sqnr_static_eager}"
+        )
+        assert sqnr_static_eager == sqnr_dynamic_compile, (
+            f"Static eager vs dynamic compile SQNR mismatch: {sqnr_static_eager} vs {sqnr_dynamic_compile}"
+        )
+        assert sqnr_dynamic_compile == sqnr_dynamic_eager, (
+            f"Dynamic SQNR mismatch: compile={sqnr_dynamic_compile} vs eager={sqnr_dynamic_eager}"
+        )
 
         # eager numerics should match exactly
         # for compile, we can't compare dynamic vs static because we may get slightly different qparams when fused
