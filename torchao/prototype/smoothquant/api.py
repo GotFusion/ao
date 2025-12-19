@@ -124,7 +124,7 @@ def _smooth_quant_transform(
 
     # Quantize weights
     if isinstance(base_config, Int8StaticActivationInt8WeightConfig):
-        base_config.scale = activation_scale
+        base_config.static_scale = activation_scale
 
     base_config_handler = _QUANTIZE_CONFIG_HANDLER[type(base_config)]
     dummy_mod = DummyModule(weight)

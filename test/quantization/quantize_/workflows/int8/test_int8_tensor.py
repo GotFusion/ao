@@ -285,6 +285,36 @@ class TestInt8StaticQuant(TorchAOIntegrationTestCase):
         # for compile, we can't compare dynamic vs static because we may get slightly different qparams when fused
         torch.testing.assert_close(dynamic_out_eager, static_out_eager)
 
+    def test_static_per_feature_act_quant_not_supported(self):
+        """Test that PerRow(dim != -1) activation quantization raises an error.
+
+        Per-feature activation quantization (PerRow(dim=0)) would require slicing
+        act_scale when weight is sliced, which is not currently supported.
+        We explicitly disallow this configuration.
+        """
+        from torchao.quantization.granularity import PerRow as PerRowGranularity
+
+        # Attempting to create a config with PerRow(dim=0) should raise an error
+        with self.assertRaises(ValueError) as cm:
+            static_config = Int8StaticActivationInt8WeightConfig(
+                static_scale=torch.ones(1, 1, device="cuda"),
+                granularity=PerRowGranularity(dim=0),  # This should fail
+                act_mapping_type=MappingType.SYMMETRIC,
+            )
+
+        self.assertIn("PerRow(dim=-1)", str(cm.exception))
+        self.assertIn("Per-feature", str(cm.exception).lower())
+
+        # Verify that PerRow() (default dim=-1) and PerTensor() still work
+        for granularity in [PerRow(), PerTensor()]:
+            static_config = Int8StaticActivationInt8WeightConfig(
+                static_scale=torch.ones(1, 1, device="cuda"),
+                granularity=granularity,
+                act_mapping_type=MappingType.SYMMETRIC,
+            )
+            # Should not raise an error
+            self.assertIsNotNone(static_config)
+
 
 if __name__ == "__main__":
     common_utils.run_tests()
