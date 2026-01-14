@@ -244,8 +244,6 @@ def gptq_quantize(H: torch.Tensor, W: torch.Tensor, config: GPTQConfig):
     Hinv = H
 
     group_qparams = []
-    # If we are doing per-row quantization, the group_size is equal to the number of columns and this will only run once.
-    # Otherwise, if we do per-group quantization, we need to iterate through the block one group at a time.
     for W_quantize_block, block_start in zip(
         torch.split(W, gptq_quantize_block_size, dim=1),
         range(0, columns, gptq_quantize_block_size),
@@ -254,6 +252,8 @@ def gptq_quantize(H: torch.Tensor, W: torch.Tensor, config: GPTQConfig):
         Err1 = torch.zeros_like(W_quantize_block, dtype=H.dtype)
         Hinv_quantize_block = Hinv[block_start:block_end, block_start:block_end]
 
+        # If we are doing per-row quantization, the group_size is equal to the number of columns and this will only run once.
+        # Otherwise, if we do per-group quantization, we need to iterate through the block one group at a time.
         for group_start in range(block_start, block_end, group_size):
             group_end = min(group_start + group_size, block_end)
 
