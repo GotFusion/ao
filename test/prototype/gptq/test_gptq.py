@@ -287,7 +287,6 @@ class TestGPTQFlow:
             pytest.param(
                 Int8WeightOnlyConfig(group_size=128),
                 id="int8",
-                marks=pytest.mark.xfail(reason="Int8 GPTQ support not yet implemented"),
             ),
         ],
     )
@@ -343,7 +342,6 @@ class TestGPTQFlow:
             pytest.param(
                 Int8WeightOnlyConfig(group_size=128),
                 id="int8",
-                marks=pytest.mark.xfail(reason="Int8 GPTQ support not yet implemented"),
             ),
         ],
     )
@@ -432,9 +430,6 @@ class TestGPTQFlow:
         for _ in range(num_samples):
             act = torch.randn(4, in_features, dtype=torch.float32, device="cuda")
             activations.append(act)
-
-        # Compute Hessian from activations
-        from torchao.prototype.gptq import _calculate_hessian
 
         H = _calculate_hessian(activations, device="cuda")
         H_identity = torch.eye(in_features, device="cuda", dtype=torch.float32)
