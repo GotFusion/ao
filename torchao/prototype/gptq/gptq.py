@@ -21,10 +21,6 @@ from torchao.quantization.quant_api import (
     Int8WeightOnlyConfig,
     _module_extra_repr,
 )
-from torchao.quantization.quantize_.workflows.int4.int4_tensor import (
-    _int4_row_dequantize_zp,
-    _int4_row_quantize_zp_precomputed_qparams,
-)
 from torchao.quantization.transform_module import register_quantize_module_handler
 from torchao.quantization.utils import get_block_size
 
@@ -106,6 +102,63 @@ def _gptq_config_transform(
         raise ValueError(
             f"Invalid step '{config.step}'. Must be 'observe' or 'convert'."
         )
+
+
+def _int4_row_quantize_zp_precomputed_qparams(
+    x: torch.Tensor,
+    scales: torch.Tensor,
+    zeros: torch.Tensor,
+    group_size: int = 128,
+) -> torch.Tensor:
+    """Quantize tensor using precomputed scales and zero points."""
+    n_bit = 4
+    to_quant = torch.split(x.to(torch.float), group_size, dim=-1)
+
+    scales_row = scales.t().contiguous()
+    zeros_row = zeros.t().contiguous()
+    scales_list = torch.split(scales_row, 1, dim=-1)
+    zeros_list = torch.split(zeros_row, 1, dim=-1)
+
+    min_val = [
+        zero_chunk - scale_chunk * (2 ** (n_bit - 1))
+        for zero_chunk, scale_chunk in zip(zeros_list, scales_list)
+    ]
+    max_int = 2**n_bit - 1
+    min_int = 0
+
+    out = [
+        chunk.sub(min_chunk).div(scale_chunk).round().clamp_(min_int, max_int)
+        for chunk, min_chunk, scale_chunk in zip(to_quant, min_val, scales_list)
+    ]
+    out = [(chunk - 2 ** (n_bit - 1)).to(dtype=torch.int8) for chunk in out]
+    out = torch.cat(out, dim=-1)
+    return out
+
+
+def _int4_row_dequantize_zp(
+    x: torch.Tensor,
+    scales: torch.Tensor,
+    zeros: torch.Tensor,
+    group_size: int = 128,
+) -> torch.Tensor:
+    """Dequantize int4 row-quantized tensor with zero point."""
+    n_bit = 4
+
+    scales = scales.t().contiguous()
+    zeros = zeros.t().contiguous()
+
+    x_chunks = torch.split(x, group_size, dim=-1)
+    scales_list = torch.split(scales, 1, dim=-1)
+    zeros_list = torch.split(zeros, 1, dim=-1)
+
+    dequant_chunks = []
+    for chunk, scale_chunk, zero_chunk in zip(x_chunks, scales_list, zeros_list):
+        chunk_float = chunk.to(torch.float32) + 2 ** (n_bit - 1)
+        min_val = zero_chunk - scale_chunk * (2 ** (n_bit - 1))
+        dequant = chunk_float * scale_chunk + min_val
+        dequant_chunks.append(dequant)
+
+    return torch.cat(dequant_chunks, dim=-1)
 
 
 def gptq_quantize(H: torch.Tensor, W: torch.Tensor, config: GPTQConfig):

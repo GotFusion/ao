@@ -17,7 +17,8 @@ from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from torchao.prototype.gptq import GPTQConfig
-from torchao.quantization import quantize_
+from torchao.quantization import Int4WeightOnlyConfig, Int8WeightOnlyConfig, quantize_
+from torchao.quantization.granularity import PerRow
 
 
 def sequential_quantize(
@@ -240,16 +241,11 @@ def main():
 
     if args.quantization == "int4-rtn":
         print("Applying Int4 RTN (Round-To-Nearest) quantization...")
-        from torchao.quantization import Int4WeightOnlyConfig
-
         config = Int4WeightOnlyConfig(group_size=args.group_size)
         quantize_(model, config, filter_fn=None)
 
     elif args.quantization == "int8-rtn":
         print("Applying Int8 RTN (Round-To-Nearest) quantization...")
-        from torchao.quantization import Int8WeightOnlyConfig
-        from torchao.quantization.granularity import PerRow
-
         config = Int8WeightOnlyConfig(version=2, granularity=PerRow())
         quantize_(model, config, filter_fn=None)
 
@@ -264,9 +260,6 @@ def main():
             base_config = Int4WeightOnlyConfig(group_size=args.group_size)
             quant_type = "Int4"
         else:  # int8
-            from torchao.quantization import Int8WeightOnlyConfig
-            from torchao.quantization.granularity import PerRow
-
             base_config = Int8WeightOnlyConfig(granularity=PerRow(), version=2)
             quant_type = "Int8"
 
@@ -303,10 +296,7 @@ def main():
             gptq_quantize_block_size=args.gptq_block_size,
         )
 
-        if "sequential" in args.quantization:
-            print(f"Applying {quant_type} GPTQ quantization (sequential)...")
-            sequential_quantize(model, dataset, convert_config)
-        else:  # nonsequential
+        if "nonsequential" in args.quantization:
             print(f"Applying {quant_type} GPTQ quantization (non-sequential)...")
             # Get device for input (from embedding layer, supports device_map="auto")
             input_device = next(model.model.embed_tokens.parameters()).device
@@ -316,6 +306,9 @@ def main():
                 model(seq.to(input_device))
             # Apply quantization
             quantize_(model, convert_config, filter_fn=None)
+        else:  # sequential
+            print(f"Applying {quant_type} GPTQ quantization (sequential)...")
+            sequential_quantize(model, dataset, convert_config)
 
     quantization_end_time = time.time()
     quantization_time = quantization_end_time - quantization_start_time

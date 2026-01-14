@@ -4,6 +4,6 @@
 # This source code is licensed under the BSD 3-Clause license found in the
 # LICENSE file in the root directory of this source tree.
 
-from .gptq import GPTQConfig, _calculate_hessian, gptq_quantize
+from .gptq import GPTQConfig, gptq_quantize
 
-__all__ = ["GPTQConfig", "gptq_quantize", "_calculate_hessian"]
+__all__ = ["GPTQConfig", "gptq_quantize"]

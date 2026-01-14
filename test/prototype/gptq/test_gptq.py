@@ -20,6 +20,35 @@ from torchao.quantization import Int4WeightOnlyConfig, Int8WeightOnlyConfig, qua
 from torchao.quantization.granularity import PerRow
 
 
+def _calculate_hessian(inputs, device=None):
+    """Calculate Hessian matrix from input activations for GPTQ.
+
+    DEPRECATED: This function is kept for backward compatibility in tests only.
+    GPTQObserverTensor now computes Hessian incrementally during observation.
+    Use GPTQObserverTensor.hessian instead for production code.
+    """
+    H = 0
+    total_batches = 0
+
+    for inp in inputs:
+        # Setup x (activation tensor)
+        x = inp.float()
+        if device:
+            x = x.to(device)
+        shape = x.shape
+        n = 1 if len(shape) == 2 else shape[0]
+        x = x.reshape(-1, shape[-1])
+
+        # Update Hessian with running average
+        H *= total_batches / (total_batches + n)
+        total_batches += n
+
+        x = ((2 / total_batches) ** (1 / 2)) * x.t()
+        H += x.matmul(x.t())
+
+    return H
+
+
 class ToyLinearModel(torch.nn.Module):
     def __init__(self, m=64, n=32, k=64):
         super().__init__()
@@ -241,8 +270,6 @@ class TestGPTQObserverTensor:
             _ = F.linear(input_tensor, observer_incremental)
 
         # Compute Hessian in batch using _calculate_hessian
-        from torchao.prototype.gptq import _calculate_hessian
-
         hessian_batch = _calculate_hessian(activations, device="cuda")
 
         # Compare incremental vs batch
@@ -458,7 +485,7 @@ class TestGPTQFlow:
         torch.manual_seed(43)
         torch.set_default_dtype(torch.bfloat16)
 
-        model = ToyLinearModel(m=512, n=256, k=128).cuda()
+        model = ToyLinearModel(m=512, n=2048, k=1024).cuda()
 
         # Create calibration and test inputs
         calibration_inputs = [
@@ -466,7 +493,6 @@ class TestGPTQFlow:
         ]
         test_input = calibration_inputs[0]
 
-        breakpoint()
         # Get baseline output
         out = model(test_input)
 
