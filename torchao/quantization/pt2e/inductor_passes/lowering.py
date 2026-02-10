@@ -9,6 +9,7 @@ import torch
 from torch._inductor.ir import Pointwise, TensorBox
 from torch._inductor.lowering import register_lowering, to_dtype
 from torch._inductor.virtualized import ops
+from torchao.float8.hifloat8_utils import hifloat8_min_max, is_hifloat8_dtype
 
 
 def _register_dequantize_fp8_lowering():
@@ -29,8 +30,11 @@ def _register_dequantize_fp8_lowering():
             input = to_dtype(input, torch.float32)
         input_loader = input.make_loader()
         scale_loader = scale.make_loader()
-        q_min = torch.finfo(float8_dtype).min
-        q_max = torch.finfo(float8_dtype).max
+        if is_hifloat8_dtype(float8_dtype):
+            q_min, q_max = hifloat8_min_max()
+        else:
+            q_min = torch.finfo(float8_dtype).min
+            q_max = torch.finfo(float8_dtype).max
         scale_idx = 0 if len(scale.get_size()) == 1 else []
 
         def inner_fn(idx):
