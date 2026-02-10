@@ -13,11 +13,56 @@ from torchao.float8.float8_training_tensor import (
     choose_scaled_mm_config,
 )
 from torchao.float8.float8_utils import is_row_major, pad_tensor_for_matmul
+from torchao.float8.hifloat8_utils import (
+    hifloat8_raw_int8,
+    hifloat8_scales_to_npu,
+    is_hifloat8_tensor,
+)
+from torchao.utils import torch_version_at_least
 
 aten = torch.ops.aten
 c10d_functional = torch.ops.c10d_functional
 _c10d_functional = torch.ops._c10d_functional
 FLOAT8_OPS_TABLE: Dict[Any, Any] = {}
+
+
+def _hif8_npu_matmul(
+    a: Float8TrainingTensor,
+    b: Float8TrainingTensor,
+    bias: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    try:
+        import torch_npu  # type: ignore
+    except Exception:
+        # Fallback to high precision if torch_npu is not available.
+        out = torch.mm(a._data.float() / a._scale, b._data.float() / b._scale).to(
+            a._orig_dtype
+        )
+        return out + bias if bias is not None else out
+
+    x1 = hifloat8_raw_int8(a._data)
+    x2 = hifloat8_raw_int8(b._data)
+    scale, pertoken_scale = hifloat8_scales_to_npu(
+        a._scale, b._scale, out_features=b._data.shape[-1]
+    )
+    device = x1.device
+    if scale.device != device:
+        scale = scale.to(device)
+    if pertoken_scale is not None and pertoken_scale.device != device:
+        pertoken_scale = pertoken_scale.to(device)
+    if bias is not None and bias.device != device:
+        bias = bias.to(device)
+
+    return torch_npu.npu_quant_matmul(
+        x1,
+        x2,
+        scale,
+        pertoken_scale=pertoken_scale,
+        bias=bias,
+        output_dtype=a._orig_dtype,
+        x1_dtype=torch_npu.hifloat8,
+        x2_dtype=torch_npu.hifloat8,
+    )
 
 
 # [Note] Usage of scales
@@ -370,6 +415,8 @@ def float8_mm(aten_op, args, kwargs=None):
     ), "Expecting  both Float8TrainingTensor for mm inputs but found {} and {}".format(
         type(a), type(b)
     )
+    if is_hifloat8_tensor(a._data) or is_hifloat8_tensor(b._data):
+        return _hif8_npu_matmul(a, b, bias=None)
     a_data, a_scale, b_data, b_scale = preprocess_addmm(a, b)
     output_dtype = a._orig_dtype
     scaled_mm_config = choose_scaled_mm_config(
@@ -405,6 +452,8 @@ def float8_addmm(aten_op, args, kwargs=None):
     bias = args[0]
     a = args[1]
     b = args[2]
+    if is_hifloat8_tensor(a._data) or is_hifloat8_tensor(b._data):
+        return _hif8_npu_matmul(a, b, bias=bias)
     a_data, a_scale, b_data, b_scale = preprocess_addmm(a, b)
     output_dtype = a._orig_dtype
     assert bias.dtype == output_dtype, "bias dtype must match output dtype"

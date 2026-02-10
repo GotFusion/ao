@@ -12,6 +12,11 @@ from typing import List, NamedTuple, Optional, Tuple, Union
 import torch
 
 from torchao.float8.float8_utils import is_row_major, pad_tensor_for_matmul
+from torchao.float8.hifloat8_utils import (
+    hifloat8_raw_int8,
+    hifloat8_scales_to_npu,
+    is_hifloat8_tensor,
+)
 from torchao.float8.types import FP8Granularity
 from torchao.quantization.granularity import (
     PerRow,
@@ -100,6 +105,42 @@ def addmm_float8_unwrapped_inference(
     as inputs. This is used to standardize the logic between subclassed and non subclassed
     versions of the linear module.
     """
+
+    # HiFloat8 tensors are not supported by torch._scaled_mm.
+    if is_hifloat8_tensor(a_data) or is_hifloat8_tensor(b_data):
+        try:
+            import torch_npu  # type: ignore
+        except Exception:
+            out = torch.mm(a_data.float() / a_scale, b_data.float() / b_scale).to(
+                output_dtype
+            )
+            if bias is not None:
+                out = out + bias
+            return out
+
+        x1 = hifloat8_raw_int8(a_data)
+        x2 = hifloat8_raw_int8(b_data)
+        scale, pertoken_scale = hifloat8_scales_to_npu(
+            a_scale, b_scale, out_features=b_data.shape[-1]
+        )
+        device = x1.device
+        if scale.device != device:
+            scale = scale.to(device)
+        if pertoken_scale is not None and pertoken_scale.device != device:
+            pertoken_scale = pertoken_scale.to(device)
+        if bias is not None and bias.device != device:
+            bias = bias.to(device)
+
+        return torch_npu.npu_quant_matmul(
+            x1,
+            x2,
+            scale,
+            pertoken_scale=pertoken_scale,
+            bias=bias,
+            output_dtype=output_dtype,
+            x1_dtype=torch_npu.hifloat8,
+            x2_dtype=torch_npu.hifloat8,
+        )
 
     if output_dtype == torch.float32 and bias is not None:
         # Bias is not supported by _scaled_mm when output is fp32
@@ -243,12 +284,32 @@ def _check_hardware_support(
         AssertionError: If hardware doesn't support the requested granularity
         ValueError: If invalid granularity type is provided
     """
-    for _granularity in granularities:
-        if not isinstance(_granularity, (PerTensor, PerRow)):
-            raise ValueError(
-                f"Invalid granularity type: {_granularity}, only PerTensor or PerRow are supported."
-            )
+    from torchao.quantization.granularity import (
+        PerRow,
+        PerTensor,
+    )
 
-        assert is_sm_at_least_89() or is_MI300(), (
-            "Float8 dynamic quantization requires CUDA compute capability ≥8.9 or MI300+."
+    is_per_tensor = isinstance(granularities[0], PerTensor) and isinstance(
+        granularities[1], PerTensor
+    )
+    is_per_row = isinstance(granularities[0], PerRow) and isinstance(
+        granularities[1], PerRow
+    )
+    is_a_1_128_w_128_128 = _granularity_is_a_1_128_w_128_128(granularities)
+
+    if is_per_tensor or is_per_row:
+        npu_available = False
+        try:
+            import torch_npu  # type: ignore
+
+            npu_available = torch_npu.npu.is_available()
+        except Exception:
+            npu_available = False
+        assert (
+            npu_available
+            or torch.xpu.is_available()
+            or (torch.cuda.is_available() and is_sm_at_least_89())
+            or is_MI300()
+        ), (
+            "Float8 dynamic quantization requires CUDA compute capability ≥8.9 or MI300+ or XPU or NPU."
         )

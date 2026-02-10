@@ -25,9 +25,11 @@ from torchao.float8.inference import (
 from torchao.quantization.granularity import PerRow, PerTensor
 from torchao.quantization.quant_primitives import (
     _choose_scale_float8,
+    _choose_scale_float8_impl,
     _dequantize_affine_float8,
     _quantize_affine_float8,
 )
+from torchao.float8.hifloat8_utils import is_hifloat8_dtype
 from torchao.quantization.quantize_.common import (
     KernelPreference,
     QuantizeTensorKwargs,
@@ -223,13 +225,23 @@ class Float8Tensor(TorchAOBaseTensor):
                 )
         else:
             assert kernel_choice == "torch", f"Expected torch, got {kernel_choice}"
-            scale = _choose_scale_float8(
-                hp_tensor,
-                float8_dtype=float8_dtype,
-                block_size=block_size,
-                hp_value_lb=hp_value_lb,
-                hp_value_ub=hp_value_ub,
-            )
+            if is_hifloat8_dtype(float8_dtype):
+                # Avoid torch.library dtype schema conversion for torch_npu.hifloat8.
+                scale = _choose_scale_float8_impl(
+                    hp_tensor,
+                    float8_dtype=float8_dtype,
+                    block_size=block_size,
+                    hp_value_lb=hp_value_lb,
+                    hp_value_ub=hp_value_ub,
+                )
+            else:
+                scale = _choose_scale_float8(
+                    hp_tensor,
+                    float8_dtype=float8_dtype,
+                    block_size=block_size,
+                    hp_value_lb=hp_value_lb,
+                    hp_value_ub=hp_value_ub,
+                )
             data = _quantize_affine_float8(hp_tensor, scale, float8_dtype)
 
         hp_dtype = hp_tensor.dtype
