@@ -19,6 +19,13 @@ from torchao.utils import (
     _register_custom_op,
     _register_meta_op,
 )
+from torchao.float8.hifloat8_utils import (
+    hifloat8_max_abs,
+    hifloat8_min_max,
+    is_hifloat8_dtype,
+    is_hifloat8_tensor,
+    to_hifloat8,
+)
 
 __all__ = [
     "choose_qparams_affine",
@@ -228,6 +235,8 @@ class _RoundToFloat8(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, x: torch.Tensor, float8_dtype: torch.dtype) -> torch.Tensor:
+        if is_hifloat8_dtype(float8_dtype):
+            return to_hifloat8(x)
         return x.to(float8_dtype)
 
     @staticmethod
@@ -251,7 +260,9 @@ def _get_and_check_qmin_qmax(dtype, quant_min, quant_max):
         ValueError: If dtype is unsupported
         AssertionError: If quant_min/quant_max are out of bounds for dtype
     """
-    if dtype in FP8_TYPES:
+    if is_hifloat8_dtype(dtype):
+        quant_min_lower_bound, quant_max_upper_bound = hifloat8_min_max()
+    elif dtype in FP8_TYPES:
         quant_min_lower_bound, quant_max_upper_bound = (
             torch.finfo(dtype).min,
             torch.finfo(dtype).max,
@@ -2378,28 +2389,25 @@ def _choose_scale_float8(
         hp_value_lb (Optional[float]): the lower bound for high precision floating point value for calculating scale
         hp_value_ub (Optional[float]): the upper bound for high precision floating point value for calculating scale
     """
-    quant_max = torch.finfo(float8_dtype).max
-    if len(block_size) == 0:
-        # tensorwise
-        max_abs = tensor.abs().max()
-        if hp_value_lb is not None or hp_value_ub is not None:
-            max_abs = torch.clamp(max_abs, min=hp_value_lb, max=hp_value_ub)
-        scale = max_abs / quant_max
-    else:
-        shape_for_reduction, reduction_dims = _get_reduction_params(
-            block_size, tensor.shape
-        )
-        tensor_reshaped = tensor.view(shape_for_reduction)
-        max_abs = tensor_reshaped.abs().amax(dim=reduction_dims, keepdim=True)
-        if hp_value_lb is not None or hp_value_ub is not None:
-            max_abs = torch.clamp(max_abs, min=hp_value_lb, max=hp_value_ub)
-        scale = max_abs / quant_max
-        # Reshape scale back to match the expected output shape
-        # The scale tensor should have the same shape as the input divided by block_size
-        output_shape = [
-            input_size // block_size[i] for i, input_size in enumerate(tensor.shape)
-        ]
-        scale = scale.reshape(output_shape)
+    quant_max = (
+        hifloat8_max_abs()
+        if is_hifloat8_dtype(float8_dtype)
+        else torch.finfo(float8_dtype).max
+    )
+    shape_for_reduction, reduction_dims = _get_reduction_params(
+        block_size, tensor.shape
+    )
+    tensor_reshaped = tensor.view(shape_for_reduction)
+    max_abs = tensor_reshaped.abs().amax(dim=reduction_dims, keepdim=True)
+    if hp_value_lb is not None or hp_value_ub is not None:
+        max_abs = torch.clamp(max_abs, min=hp_value_lb, max=hp_value_ub)
+    scale = max_abs / quant_max
+    # Reshape scale back to match the expected output shape
+    # The scale tensor should have the same shape as the input divided by block_size
+    output_shape = [
+        input_size // block_size[i] for i, input_size in enumerate(tensor.shape)
+    ]
+    scale = scale.reshape(output_shape)
 
     if scale_dtype is not torch.float32:
         # Shielding for Version > 2.8
@@ -2478,7 +2486,11 @@ def _quantize_affine_float8(
     scale_expanded = _maybe_expand_scale_to_tensor_shape(scale, tensor.shape)
 
     tensor_scaled = tensor_fp32 / scale_expanded
-    max_value = torch.finfo(float8_dtype).max
+    max_value = (
+        hifloat8_max_abs()
+        if is_hifloat8_dtype(float8_dtype)
+        else torch.finfo(float8_dtype).max
+    )
     tensor_clamped = tensor_scaled.clamp(min=-max_value, max=max_value)
     return _RoundToFloat8.apply(tensor_clamped, float8_dtype)
 
@@ -2491,7 +2503,10 @@ def _dequantize_affine_float8(
     """
     Dequantizes the float8 tensor to high precision tensor.
     """
-    fp8_tensor = tensor.to(torch.float32)
+    if is_hifloat8_tensor(tensor):
+        fp8_tensor = tensor.float()
+    else:
+        fp8_tensor = tensor.to(torch.float32)
 
     # Expand scale to match tensor dimensions for block-wise quantization
     scale_expanded = _maybe_expand_scale_to_tensor_shape(scale, tensor.shape)
@@ -2522,6 +2537,8 @@ def _quantize_affine_float8_meta(
     scale: torch.Tensor,
     float8_dtype: torch.dtype = torch.float8_e4m3fn,
 ) -> torch.Tensor:
+    if is_hifloat8_dtype(float8_dtype):
+        return torch.empty_like(tensor, dtype=torch.uint8)
     return torch.empty_like(tensor, dtype=float8_dtype)
 
 
